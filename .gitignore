@@ -1,0 +1,13 @@
+# Local config files contain secrets (Discord webhook URL, IP addresses).
+# Copy .env.example to .env in each folder and fill in your values.
+.env
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/

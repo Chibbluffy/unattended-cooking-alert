@@ -1,0 +1,10 @@
+# Pi-side dependencies
+#
+# opencv-python is NOT listed here because on Raspberry Pi OS it must be
+# installed via apt to get the correct hardware-accelerated build:
+#   sudo apt install python3-opencv
+#
+# Install everything else with:
+#   pip3 install -r requirements.txt
+numpy
+python-dotenv

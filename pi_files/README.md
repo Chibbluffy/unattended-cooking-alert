@@ -1,20 +1,8 @@
-# ThermalWatch — Pi Setup
+# ThermalWatch - Pi Setup
 
-The Pi side reads raw thermal frames from the TOPDON TC001 camera and forwards anything above the temperature threshold to the phone over UDP. During normal operation it is completely silent — nothing is logged, nothing is written to disk.
+The Pi reads raw thermal frames from the TOPDON TC001 camera and forwards anything above the temperature threshold to the phone over UDP. During normal operation it is completely silent - nothing is logged, nothing is written to disk.
 
----
-
-## Hardware
-
-- Raspberry Pi Zero W
-- TOPDON TC001 thermal camera
-- Micro USB OTG adapter
-- MicroSD card (8GB+)
-- Reliable 5V/2A micro USB power supply
-
-> Connect the TC001 to the port labeled **USB**, not **PWR IN**. The Pi Zero W has two micro USB ports — this is a common mistake.
-
----
+For hardware requirements and an overview of how the system works, see the [main README](../README.md).
 
 ## OS
 
@@ -26,11 +14,9 @@ Flash with the official [Raspberry Pi Imager](https://www.raspberrypi.com/softwa
 - Username and password
 - Hostname (e.g. `thermalpi`)
 
-This means you never need a monitor or keyboard — just power it on and SSH in.
+This way you never need a monitor or keyboard - just power it on and SSH in.
 
 Assign a static IP to the Pi via your router's DHCP reservation so the address never changes.
-
----
 
 ## Reduce SD Card Wear
 
@@ -59,10 +45,8 @@ tmpfs /tmp tmpfs defaults,noatime,nosuid,size=30m 0 0
 ```
 
 **Disable access-time writes on the root filesystem:**
-```bash
-sudo nano /etc/fstab
-```
-Find the root mount line and add `noatime` to its options:
+
+Find the root mount line in `/etc/fstab` and add `noatime` to its options:
 ```
 PARTUUID=xxxxxxxx  /  ext4  defaults,noatime  0  1
 ```
@@ -86,37 +70,43 @@ sudo systemctl disable triggerhappy
 sudo reboot
 ```
 
----
-
 ## Install Dependencies
 
 ```bash
 sudo apt update && sudo apt upgrade -y
 sudo apt install -y python3-pip python3-opencv v4l-utils ffmpeg
-pip3 install python-dotenv numpy
+pip3 install -r requirements.txt
 ```
-
----
 
 ## Configuration
 
-Edit `config.env` before deploying:
+Copy the example config and fill in your values:
+```bash
+cp .env.example .env
+nano .env
+```
+
+Settings:
 
 | Setting | Default | Description |
 |---|---|---|
 | `PHONE_IP` | `192.168.1.105` | Static IP of the phone on your network |
-| `UDP_PORT` | `5000` | Must match `UDP_PORT` in phone's `config.env` |
-| `TEMP_THRESHOLD` | `100` | °C — frames above this are sent to the phone |
-| `SAMPLE_FPS` | `2` | Frames per second to sample from camera |
-| `LOG_FILE` | `/tmp/thermalwatch.log` | Log path — `/tmp` is RAM, change to persist |
-
----
+| `UDP_PORT` | `5000` | Must match `UDP_PORT` in phone_files/.env |
+| `TEMP_THRESHOLD` | `100` | Celsius - frames above this are sent to the phone |
+| `SAMPLE_FPS` | `2` | Frames per second to sample from the camera |
+| `LOG_FILE` | `/tmp/thermalwatch.log` | Log path - /tmp is RAM, change to persist |
 
 ## Deploy
 
 Copy files to the Pi:
 ```bash
-scp pi_sender.py config.env pi@YOUR_PI_IP:~/thermalwatch/
+scp pi_sender.py .env.example requirements.txt pi@YOUR_PI_IP:~/thermalwatch/
+```
+
+Then on the Pi:
+```bash
+cp ~/thermalwatch/.env.example ~/thermalwatch/.env
+nano ~/thermalwatch/.env
 ```
 
 Plug in the TC001 via OTG adapter and verify it's detected:
@@ -130,8 +120,6 @@ Run manually to test:
 ```bash
 python3 ~/thermalwatch/pi_sender.py
 ```
-
----
 
 ## Run on Boot
 
@@ -156,21 +144,15 @@ Enable and start:
 ```bash
 sudo systemctl enable thermalwatch
 sudo systemctl start thermalwatch
-```
-
-Check it's running:
-```bash
 sudo systemctl status thermalwatch
 ```
-
----
 
 ## Logging
 
 The script is silent during normal operation. Errors are written to `LOG_FILE` (default: `/tmp/thermalwatch.log` in RAM).
 
-**What gets logged:**
-- Config file missing or unreadable (stderr, since log isn't set up yet)
+What gets logged:
+- Config file missing or unreadable (stderr, since log path is not yet known)
 - Camera fails to open
 - 10+ consecutive frame read failures
 - Temperature data extraction failure
@@ -182,7 +164,7 @@ The script is silent during normal operation. Errors are written to `LOG_FILE` (
 cat /tmp/thermalwatch.log
 ```
 
-**To persist logs across reboots** when debugging, change in `config.env`:
+To persist logs across reboots when debugging, set in `.env`:
 ```env
 LOG_FILE=/home/pi/thermalwatch/errors.log
 ```

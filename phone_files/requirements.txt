@@ -1,0 +1,11 @@
+# Phone-side dependencies
+#
+# termux-api is NOT a pip package - install it via pkg in Termux:
+#   pkg install termux-api
+# (required for verbal alerts via termux-tts-speak)
+#
+# Install everything else with:
+#   pip install -r requirements.txt
+numpy
+requests
+python-dotenv
