@@ -43,6 +43,7 @@ Settings:
 | `PERSON_MIN_PIXELS` | `30` | Minimum pixel blob size to count as a person |
 | `SPEAK_INTERVAL` | `30` | Seconds between verbal alarm repeats while stove is unattended |
 | `ALERT_COOLDOWN` | `300` | Seconds between repeated Discord messages |
+| `LOG_FILE` | *(unset)* | Log file path for warnings/errors; defaults to stderr if unset |
 
 ## Set Up Discord Webhook
 

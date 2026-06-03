@@ -92,6 +92,7 @@ Settings:
 |---|---|---|
 | `PHONE_IP` | `192.168.1.105` | Static IP of the phone on your network |
 | `UDP_PORT` | `5000` | Must match `UDP_PORT` in phone_files/.env |
+| `CAMERA_INDEX` | `0` | V4L2 device index - run `v4l2-ctl --list-devices` to find it |
 | `TEMP_THRESHOLD` | `100` | Celsius - frames above this are sent to the phone |
 | `SAMPLE_FPS` | `2` | Frames per second to sample from the camera |
 | `LOG_FILE` | `/tmp/thermalwatch.log` | Log path - /tmp is RAM, change to persist |

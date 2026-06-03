@@ -6,8 +6,10 @@ on and whether a person is present, and fires a Discord webhook alert plus a
 spoken announcement if the stove is left unattended.
 
 Run with: python3 phone_receiver.py
+          python3 phone_receiver.py --debug   # live output to stderr
 """
 
+import argparse
 import logging
 import os
 import socket
@@ -20,7 +22,11 @@ import numpy as np
 import requests
 from dotenv import dotenv_values
 
-# Load config
+parser = argparse.ArgumentParser()
+parser.add_argument("--debug", action="store_true", help="Print debug logs to stderr")
+args = parser.parse_args()
+
+# ── Load config ───────────────────────────────────────────────────────────────
 _config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 try:
     config              = dotenv_values(_config_path)
@@ -32,18 +38,42 @@ try:
     PERSON_MIN_PIXELS   = int(config["PERSON_MIN_PIXELS"])
     SPEAK_INTERVAL      = int(config.get("SPEAK_INTERVAL", "30"))
     ALERT_COOLDOWN      = int(config.get("ALERT_COOLDOWN", "300"))
+    LOG_FILE            = config.get("LOG_FILE", "")
+except KeyError as e:
+    print(f"CRITICAL: Missing required key {e} in {_config_path}.", file=sys.stderr)
+    print(f"  → Copy .env.example to .env and fill in all values.", file=sys.stderr)
+    raise
 except Exception as e:
     print(f"CRITICAL: Failed to load .env ({_config_path}): {e}", file=sys.stderr)
+    print(f"  → Make sure .env exists in the same directory as this script.", file=sys.stderr)
     raise
 
-CHUNK_BUFFER_TTL = 10.0  # seconds before an incomplete/stale frame is discarded
+# ── Logging setup ─────────────────────────────────────────────────────────────
+# WARNING+ always goes to stderr.
+# --debug additionally lowers the stderr level to DEBUG.
+# If LOG_FILE is set, WARNING+ also goes to that file.
+_fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 
-logging.basicConfig(
-    level=logging.WARNING,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
 log = logging.getLogger("thermalwatch")
+log.setLevel(logging.DEBUG if args.debug else logging.WARNING)
+
+_stderr_handler = logging.StreamHandler(sys.stderr)
+_stderr_handler.setLevel(logging.DEBUG if args.debug else logging.WARNING)
+_stderr_handler.setFormatter(_fmt)
+log.addHandler(_stderr_handler)
+
+if LOG_FILE:
+    _file_handler = logging.FileHandler(LOG_FILE)
+    _file_handler.setLevel(logging.WARNING)
+    _file_handler.setFormatter(_fmt)
+    log.addHandler(_file_handler)
+
+# Seconds before an incomplete frame's chunks are discarded. Protects against
+# memory buildup when a chunk is dropped by UDP and the frame never completes.
+# The chunk buffer is keyed by total_chunks (always 4 for this camera/protocol),
+# so a new frame's chunks will start overwriting a stale incomplete frame after
+# TTL eviction. At 2fps on a local network this is never a problem in practice.
+CHUNK_BUFFER_TTL = 10.0
 
 
 def person_present(temp_array):
@@ -73,7 +103,7 @@ def speak_alert(text):
 def send_discord_alert(message):
     """Send a notification to Discord via webhook."""
     if not DISCORD_WEBHOOK_URL or "YOUR_WEBHOOK_HERE" in DISCORD_WEBHOOK_URL:
-        print(f"  [Alert] Discord not configured - would have sent: {message}")
+        log.debug("Discord not configured - would have sent: %s", message)
         return
     try:
         resp = requests.post(
@@ -115,17 +145,13 @@ def main():
     sock.bind(("0.0.0.0", UDP_PORT))
     sock.settimeout(30)  # loop every 30s to check Pi offline status
 
-    last_person_seen   = time.time()
+    last_safe_time     = time.time()  # last HEARTBEAT or person-in-frame
     last_alert_sent    = 0.0
     last_spoken        = 0.0
     alarm_active       = False
     pi_last_seen       = time.time()
     alerted_pi_offline = False
 
-    # chunk_buffer: { total_chunks: {"chunks": {index: bytes}, "timestamp": float} }
-    # Keyed by total_chunks because at this resolution frames always produce the
-    # same chunk count (4 chunks for a 192x256 float32 array). The TTL cleanup
-    # above handles chunks that arrive but never complete due to packet loss.
     chunk_buffer = {}
 
     print("Listening...\n")
@@ -144,6 +170,7 @@ def main():
         stale = [k for k, v in chunk_buffer.items()
                  if now - v["timestamp"] > CHUNK_BUFFER_TTL]
         for k in stale:
+            log.debug("Evicting stale chunk buffer entry (key=%d)", k)
             del chunk_buffer[k]
 
         try:
@@ -152,9 +179,13 @@ def main():
             alerted_pi_offline = False
 
             if raw == b"HEARTBEAT":
-                # Pi is alive, nothing hot - stove is off, cancel any active alarm
-                last_person_seen = time.time()
-                alarm_active     = False
+                # Pi is alive and no pixel exceeded the threshold - stove is off.
+                # Reset the safe timer and clear any active alarm.
+                if alarm_active:
+                    log.warning("Stove cooled / turned off - alarm cleared.")
+                    alarm_active = False
+                last_safe_time = time.time()
+                log.debug("Heartbeat received")
                 continue
 
             if len(raw) < 3:
@@ -180,6 +211,7 @@ def main():
             chunk_buffer[total_chunks]["chunks"][chunk_index] = chunk_data
 
             if len(chunk_buffer[total_chunks]["chunks"]) < total_chunks:
+                log.debug("Buffered chunk %d/%d", chunk_index + 1, total_chunks)
                 continue  # still waiting on remaining chunks
 
             # All chunks received - reassemble and process
@@ -197,20 +229,26 @@ def main():
             max_temp = float(np.max(temp_array))
 
             if person_present(temp_array):
-                last_person_seen = time.time()
-                alarm_active     = False
-                print(f"  Person detected ({max_temp:.1f}C max) - alarm cleared.")
+                if alarm_active:
+                    log.warning("Person detected - alarm cleared. (max_temp=%.1f°C)", max_temp)
+                else:
+                    log.debug("Person detected (max_temp=%.1f°C)", max_temp)
+                last_safe_time = time.time()
+                alarm_active   = False
             else:
-                inactive_for = time.time() - last_person_seen
-                print(
-                    f"  No person ({max_temp:.1f}C max) - "
-                    f"inactive {inactive_for:.0f}s / {INACTIVITY_TIMEOUT}s"
+                inactive_for = time.time() - last_safe_time
+                log.debug(
+                    "No person detected (max_temp=%.1f°C, inactive %.0fs/%ds)",
+                    max_temp, inactive_for, INACTIVITY_TIMEOUT,
                 )
                 if inactive_for >= INACTIVITY_TIMEOUT:
                     now = time.time()
                     if not alarm_active:
-                        # First trigger - activate the alarm
                         minutes = int(inactive_for // 60)
+                        log.warning(
+                            "Alarm triggered: no person for %dm, max_temp=%.1f°C",
+                            minutes, max_temp,
+                        )
                         discord_msg = (
                             f"⚠️ **Stove Alert** - The stove appears to be on "
                             f"({max_temp:.0f}C detected) but no one has been "
@@ -227,8 +265,11 @@ def main():
                         last_spoken     = time.time()  # refresh after blocking speak
                         last_alert_sent = time.time()
                     elif (now - last_alert_sent) >= ALERT_COOLDOWN:
-                        # Alarm already active - repeat Discord at cooldown rate
                         minutes = int(inactive_for // 60)
+                        log.warning(
+                            "Alarm still active: no person for %dm, max_temp=%.1f°C",
+                            minutes, max_temp,
+                        )
                         discord_msg = (
                             f"⚠️ **Stove Alert** - Still no one in the kitchen "
                             f"({minutes} minute(s), {max_temp:.0f}C). "
@@ -240,6 +281,7 @@ def main():
         except socket.timeout:
             pi_offline_for = time.time() - pi_last_seen
             if pi_offline_for > 60 and not alerted_pi_offline:
+                log.warning("Pi offline for %.0fs - sending alert", pi_offline_for)
                 discord_msg = (
                     f"⚠️ **ThermalWatch offline** - No signal from the Pi for "
                     f"{int(pi_offline_for)}s. The monitoring system may be down."
