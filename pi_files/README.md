@@ -101,7 +101,7 @@ Settings:
 
 Copy files to the Pi:
 ```bash
-scp pi_sender.py .env.example requirements.txt pi@YOUR_PI_IP:~/thermalwatch/
+scp pi_sender.py pi_sender_test.py .env.example requirements.txt pi@YOUR_PI_IP:~/thermalwatch/
 ```
 
 Then on the Pi:
@@ -115,7 +115,7 @@ Plug in the TC001 via OTG adapter and verify it's detected:
 v4l2-ctl --list-devices
 ```
 
-Note the device index. If it's not `0`, update the `open_camera(device_index=0)` call in `pi_sender.py`.
+If the device index isn't `0`, set `CAMERA_INDEX` in `.env` to match.
 
 Run manually to test:
 ```bash
@@ -148,12 +148,34 @@ sudo systemctl start thermalwatch
 sudo systemctl status thermalwatch
 ```
 
+## Testing Without the Camera
+
+`pi_sender_test.py` sends mock temperature frames to the phone using the same `.env`, so you can test the full pipeline without the TC001 connected.
+
+```bash
+# hot stove, no person - phone should trigger alarm after INACTIVITY_TIMEOUT
+python3 pi_sender_test.py
+
+# hot stove with a person present - phone should stay quiet
+python3 pi_sender_test.py --mode person
+
+# no heat detected - phone stays alive, clears any active alarm
+python3 pi_sender_test.py --mode heartbeat
+
+# full cycle: 30s of heartbeats, then hot frames until Ctrl+C
+python3 pi_sender_test.py --mode scenario
+```
+
 ## Logging
 
-The script is silent during normal operation. Errors are written to `LOG_FILE` (default: `/tmp/thermalwatch.log` in RAM).
+During normal operation, warnings and errors go to both stderr and `LOG_FILE` (default: `/tmp/thermalwatch.log` in RAM). To also see debug output while the script is running:
+
+```bash
+python3 pi_sender.py --debug
+```
 
 What gets logged:
-- Config file missing or unreadable (stderr, since log path is not yet known)
+- Config file missing or unreadable (stderr only, log path not yet known)
 - Camera fails to open
 - 10+ consecutive frame read failures
 - Temperature data extraction failure
@@ -165,7 +187,7 @@ What gets logged:
 cat /tmp/thermalwatch.log
 ```
 
-To persist logs across reboots when debugging, set in `.env`:
+To persist logs across reboots, set in `.env`:
 ```env
 LOG_FILE=/home/pi/thermalwatch/errors.log
 ```

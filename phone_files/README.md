@@ -1,6 +1,6 @@
 # ThermalWatch - Phone Setup
 
-The phone receives temperature frames from the Pi over UDP and handles all detection logic: is the burner on? is a person present? how long have they been gone? It fires a Discord alert and speaks an announcement if the stove is left unattended, and a separate alert if the Pi itself goes offline.
+The phone receives temperature frames from the Pi over UDP and handles all detection logic: is the burner on? is a person present? how long have they been gone? It fires a Discord alert and plays an audible alarm if the stove is left unattended. The alarm stops immediately when a person is detected. A Discord-only alert fires if the Pi goes offline.
 
 For an overview of how the system works, see the [main README](../README.md).
 
@@ -17,11 +17,14 @@ For an overview of how the system works, see the [main README](../README.md).
 In Termux:
 ```bash
 pkg update && pkg upgrade
-pkg install python termux-api
+pkg install python termux-api sox
 pip install -r requirements.txt
 ```
 
-`termux-api` enables the `termux-tts-speak` command used for verbal alerts. If you skip it, verbal alerts are silently disabled and only Discord notifications fire.
+- `termux-api` provides `termux-tts-speak` for the spoken part of the alarm
+- `sox` provides the `play` command used to generate the audible beep sequence
+
+If either is missing, that part of the alert silently fails — Discord notifications always fire regardless.
 
 ## Configuration
 
@@ -41,8 +44,9 @@ Settings:
 | `PERSON_TEMP_MIN` | `28` | Lower bound of human body temp range in Celsius |
 | `PERSON_TEMP_MAX` | `40` | Upper bound of human body temp range in Celsius |
 | `PERSON_MIN_PIXELS` | `30` | Minimum pixel blob size to count as a person |
-| `SPEAK_INTERVAL` | `30` | Seconds between verbal alarm repeats while stove is unattended |
+| `SPEAK_INTERVAL` | `30` | Seconds between audible alarm repeats while stove is unattended |
 | `ALERT_COOLDOWN` | `300` | Seconds between repeated Discord messages |
+| `ALERT_SCRIPT` | *(unset)* | Path to alert script; defaults to `alert.py` in the same directory |
 | `LOG_FILE` | *(unset)* | Log file path for warnings/errors; defaults to stderr if unset |
 
 ## Set Up Discord Webhook
@@ -57,9 +61,9 @@ Settings:
 Copy files to the phone (via SSH, USB, or any file transfer app):
 ```bash
 mkdir ~/thermalwatch
-# copy phone_receiver.py, .env.example, and requirements.txt into ~/thermalwatch/
+# copy phone_receiver.py, alert.py, .env.example, and requirements.txt into ~/thermalwatch/
 cp ~/thermalwatch/.env.example ~/thermalwatch/.env
-# then edit .env with your Discord webhook URL and phone IP
+# then edit .env with your Discord webhook URL
 ```
 
 Run manually to test:
@@ -67,7 +71,7 @@ Run manually to test:
 python3 ~/thermalwatch/phone_receiver.py
 ```
 
-You should see it print startup info and then `Listening...`. When the Pi sends a heartbeat or frame, it prints activity to the console. When an alert fires, you will hear it spoken aloud and receive a Discord message.
+You should see it print startup info and then `Listening...`. Run with `--debug` to see live activity (heartbeats, frames, person detection) in the terminal. When an alert fires, the phone will play a beep alarm sequence followed by a spoken message, and you will receive a Discord notification.
 
 ## Run on Boot (Termux:Boot)
 
@@ -113,6 +117,6 @@ Tuning tips:
 2. No person is detected in that frame, AND
 3. This has been the case for `INACTIVITY_TIMEOUT` seconds
 
-On first trigger: a Discord message is sent and the phone speaks the alert aloud. The verbal alarm then repeats every 30 seconds until a person comes into view or the stove cools down. Discord follow-up messages are sent at most once every 5 minutes to avoid spam.
+On first trigger: a Discord message is sent and `alert.py` is launched in the background — it plays a 520 Hz square wave alarm in the T-3 fire alarm pattern, then speaks the alert. The alarm repeats every `SPEAK_INTERVAL` seconds (default 30s) until a person comes into view or the stove cools down. When a person is detected, the alarm process is killed immediately. Discord follow-up messages are sent at most once every `ALERT_COOLDOWN` seconds (default 5 min) to avoid spam.
 
-**Pi offline alert** fires when no message (frame or heartbeat) is received from the Pi for 60 seconds. This catches power outages, crashes, or a disconnected camera.
+**Pi offline alert** fires when no message (frame or heartbeat) is received from the Pi for 60 seconds. Sends a Discord notification only. This catches power outages, crashes, or a disconnected camera.

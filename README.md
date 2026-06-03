@@ -19,9 +19,10 @@ Android phone running Termux  [phone_files/]
   - receives temperature frames
   - detects burner on (high temp region)
   - detects person present (human-temperature blob)
-  - if burner on + no person for 5 minutes: Discord alert + verbal announcement
-  - verbal alarm repeats every 30 seconds until someone comes into view
-  - if Pi goes offline: Discord alert + verbal announcement
+  - if burner on + no person for 5 minutes: Discord alert + audible alarm
+  - audible alarm repeats every 30 seconds until someone comes into view
+  - alarm stops immediately when a person is detected
+  - if Pi goes offline: Discord alert
 ```
 
 Design principles:

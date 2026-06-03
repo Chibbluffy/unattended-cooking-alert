@@ -39,6 +39,9 @@ try:
     SPEAK_INTERVAL      = int(config.get("SPEAK_INTERVAL", "30"))
     ALERT_COOLDOWN      = int(config.get("ALERT_COOLDOWN", "300"))
     LOG_FILE            = config.get("LOG_FILE", "")
+    ALERT_SCRIPT        = config.get("ALERT_SCRIPT", "") or os.path.join(
+                              os.path.dirname(os.path.abspath(__file__)), "alert.py"
+                          )
 except KeyError as e:
     print(f"CRITICAL: Missing required key {e} in {_config_path}.", file=sys.stderr)
     print(f"  → Copy .env.example to .env and fill in all values.", file=sys.stderr)
@@ -86,18 +89,34 @@ def person_present(temp_array):
     return int(np.sum(mask)) >= PERSON_MIN_PIXELS
 
 
-def speak_alert(text):
+_alert_proc = None
+
+
+def stop_alert():
+    """Terminate the alert process if one is running."""
+    global _alert_proc
+    if _alert_proc is not None and _alert_proc.poll() is None:
+        _alert_proc.terminate()
+        log.debug("Alert process terminated")
+
+
+def fire_alert(message):
     """
-    Speak the alert text aloud using Termux TTS (requires Termux:API +
-    'pkg install termux-api'), falling back to espeak if available.
-    Silently skips if neither is installed.
+    Launch alert.py in the background so the receive loop keeps running.
+    If an alert is already playing, skip — it will repeat on the next SPEAK_INTERVAL.
     """
-    for cmd in [["termux-tts-speak", text], ["espeak", text]]:
-        try:
-            subprocess.run(cmd, timeout=30, check=False, capture_output=True)
-            return
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            continue
+    global _alert_proc
+    if _alert_proc is not None and _alert_proc.poll() is None:
+        log.debug("Alert already playing, skipping")
+        return
+    try:
+        _alert_proc = subprocess.Popen(
+            [sys.executable, ALERT_SCRIPT, message],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as e:
+        log.warning("Failed to launch alert script: %s", e)
 
 
 def send_discord_alert(message):
@@ -162,8 +181,8 @@ def main():
         # speak_alert is blocking (~a few seconds), which is acceptable here.
         now = time.time()
         if alarm_active and (now - last_spoken) >= SPEAK_INTERVAL:
-            speak_alert("Stove alert. Please check the stove.")
-            last_spoken = now
+            fire_alert("Stove alert. Please check the stove.")
+            last_spoken = time.time()
 
         # Evict stale incomplete frames to prevent memory buildup from lost packets
         now = time.time()
@@ -183,6 +202,7 @@ def main():
                 # Reset the safe timer and clear any active alarm.
                 if alarm_active:
                     log.warning("Stove cooled / turned off - alarm cleared.")
+                    stop_alert()
                     alarm_active = False
                 last_safe_time = time.time()
                 log.debug("Heartbeat received")
@@ -231,6 +251,7 @@ def main():
             if person_present(temp_array):
                 if alarm_active:
                     log.warning("Person detected - alarm cleared. (max_temp=%.1f°C)", max_temp)
+                    stop_alert()
                 else:
                     log.debug("Person detected (max_temp=%.1f°C)", max_temp)
                 last_safe_time = time.time()
@@ -260,9 +281,9 @@ def main():
                             f"minutes with no one nearby. Please check the stove."
                         )
                         send_discord_alert(discord_msg)
-                        speak_alert(spoken_msg)
+                        fire_alert(spoken_msg)
                         alarm_active    = True
-                        last_spoken     = time.time()  # refresh after blocking speak
+                        last_spoken     = time.time()
                         last_alert_sent = time.time()
                     elif (now - last_alert_sent) >= ALERT_COOLDOWN:
                         minutes = int(inactive_for // 60)
@@ -286,12 +307,7 @@ def main():
                     f"⚠️ **ThermalWatch offline** - No signal from the Pi for "
                     f"{int(pi_offline_for)}s. The monitoring system may be down."
                 )
-                spoken_msg = (
-                    f"Warning. ThermalWatch has been offline for "
-                    f"{int(pi_offline_for)} seconds. The monitoring system may be down."
-                )
                 send_discord_alert(discord_msg)
-                speak_alert(spoken_msg)
                 alerted_pi_offline = True
                 last_alert_sent    = time.time()
 
